@@ -17,11 +17,15 @@ const (
 )
 
 type Provider struct {
-	Id          int          `json:"id"`
-	Type        ProviderType `json:"type" `
-	Username    string       `json:"username"`
-	Password    string       `json:"password"`
-	PhoneNumber string       `json:"phone_number"`
+	Id                 int          `json:"id"`
+	Type               ProviderType `json:"type" `
+	Username           string       `json:"username"`
+	Password           string       `json:"password"`
+	PhoneNumber        string       `json:"phone_number"`
+	Success            int          `json:"success"`
+	Failed             int          `json:"failed"`
+	InvalidCredential  bool         `json:"invalid_credntial"`
+	InSufficientCredit bool         `json:"insufficient_credit"`
 }
 
 type ProviderCreationRequest struct {

@@ -3,6 +3,8 @@ package database
 import (
 	"database/sql"
 	"main/entities"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type sqliteStorage struct {
@@ -12,11 +14,15 @@ type sqliteStorage struct {
 func Migrate(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS providers (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			username VARCHAR(255) NOT NULL,
-			password VARCHAR(255) NOT NULL,
-			type VARCHAR(255) NOT NULL,
-			phone_number VARCHAR(255) NOT NULL
+			id 					INTEGER PRIMARY KEY AUTOINCREMENT,
+			username			VARCHAR(255) NOT NULL,
+			password			VARCHAR(255) NOT NULL,
+			type 				VARCHAR(255) NOT NULL,
+			phone_number 		VARCHAR(255) NOT NULL,
+			success 			INTEGER DEFAULT 0,
+			failed 				INTEGER DEFAULT 0,
+			invalid_credential 	BOOLEAN DEFAULT false,
+			insufficient_credit BOOLEAN DEFAULT false
 		);
 	`)
 	return err
@@ -34,37 +40,64 @@ func NewSqliteStorage(connStr string) (*sqliteStorage, error) {
 	return &sqliteStorage{db: db}, nil
 }
 
-func (s *sqliteStorage) GetProviderById(id int) (*entities.Provider, error) {
+type Scanner interface {
+	Scan(dest ...any) error
+}
+
+func (s *sqliteStorage) scanIntoProvider(row Scanner) (*entities.Provider, error) {
 	provider := &entities.Provider{}
-	row := s.db.QueryRow(`SELECT id, username, password, phone_number, type FROM providers WHERE id = $1`, id)
 	err := row.Scan(
 		&provider.Id,
 		&provider.Username,
 		&provider.Password,
 		&provider.PhoneNumber,
 		&provider.Type,
+		&provider.Success,
+		&provider.Failed,
+		&provider.InvalidCredential,
+		&provider.InSufficientCredit,
 	)
-	if err != nil {
-		return nil, err
+	return provider, err
+}
+
+func (s *sqliteStorage) scanIntoProviders(rows *sql.Rows) ([]*entities.Provider, error) {
+	providers := []*entities.Provider{}
+	for rows.Next() {
+		provider, err := s.scanIntoProvider(rows)
+		if err != nil {
+			return nil, err
+		}
+		providers = append(providers, provider)
 	}
-	return provider, nil
+	return providers, nil
+}
+
+func (s *sqliteStorage) GetProviderById(id int) (*entities.Provider, error) {
+	row := s.db.QueryRow(`
+		SELECT
+			id, username, password,
+			phone_number, type,
+			success, failed, invalid_credential,
+			insufficient_credit
+			FROM providers
+			WHERE id = $1`,
+		id,
+	)
+	return s.scanIntoProvider(row)
 }
 
 func (s *sqliteStorage) GetProviderByUsername(username string) (*entities.Provider, error) {
-	provider := &entities.Provider{}
-	row := s.db.QueryRow(
-		`SELECT id, username, password, phone_number, type FROM providers WHERE username = $1`, username)
-	err := row.Scan(
-		&provider.Id,
-		&provider.Username,
-		&provider.Password,
-		&provider.PhoneNumber,
-		&provider.Type,
+	row := s.db.QueryRow(`
+		SELECT
+			id, username, password,
+			phone_number, type,
+			success, failed, invalid_credential,
+			insufficient_credit
+		FROM providers
+		WHERE username = $1`,
+		username,
 	)
-	if err != nil {
-		return nil, err
-	}
-	return provider, nil
+	return s.scanIntoProvider(row)
 }
 
 /*
@@ -72,9 +105,13 @@ Checks if the given provider exists or not
 
 	returns true if exist
 */
-func (s *sqliteStorage) FoundProviderByUsername(username string) (bool, error) {
-	err := s.db.QueryRow(
-		`SELECT username FROM providers WHERE username = $1`, username).Scan(&username)
+func (s *sqliteStorage) ExistProviderByUsername(username string) (bool, error) {
+	err := s.db.QueryRow(`
+		SELECT 
+			username 
+		FROM providers 
+		WHERE username = $1`,
+		username).Scan(&username)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -86,33 +123,70 @@ func (s *sqliteStorage) FoundProviderByUsername(username string) (bool, error) {
 }
 
 func (s *sqliteStorage) GetAllProviders() ([]*entities.Provider, error) {
-	providers := []*entities.Provider{}
-	rows, err := s.db.Query(`SELECT id, username, password, phone_number, type FROM providers`)
+	rows, err := s.db.Query(`
+		SELECT 
+			id, username, password, 
+			phone_number, type,
+			success, failed, invalid_credential,
+			insufficient_credit 
+		FROM providers`,
+	)
 	if err != nil {
 		return nil, err
 	}
-
-	for rows.Next() {
-		provider := &entities.Provider{}
-		err := rows.Scan(
-			&provider.Id,
-			&provider.Username,
-			&provider.Password,
-			&provider.PhoneNumber,
-			&provider.Type,
-		)
-		if err != nil {
-			return nil, err
-		}
-		providers = append(providers, provider)
-	}
-	return providers, nil
+	return s.scanIntoProviders(rows)
 }
 
+/* Sort providers base on availability */
+func (s *sqliteStorage) GetAvailableProviders() ([]*entities.Provider, error) {
+	rows, err := s.db.Query(`
+		SELECT 
+			id, username, password, 
+			phone_number, type,
+			success, failed, invalid_credential,
+			insufficient_credit 
+		FROM providers
+		WHERE 
+			invalid_credential = false AND 
+			insufficient_credit = false
+		ORDER BY failed ASC, success DESC
+		`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return s.scanIntoProviders(rows)
+}
 func (s sqliteStorage) CreateProvider(p *entities.Provider) error {
-	_, err := s.db.Exec(
-		`INSERT INTO providers(username, password, phone_number, type) VALUES ($1,$2,$3,$4)`,
+	_, err := s.db.Exec(`
+		INSERT INTO 
+			providers(username, password, phone_number, type, success, 
+				failed, invalid_credential, insufficient_credit) 
+		VALUES ($1,$2,$3,$4, $5, $6, $7, $8)`,
+		p.Username, p.Password, p.PhoneNumber,
+		p.Type, p.Success, p.Failed,
+		p.InvalidCredential, p.InSufficientCredit,
+	)
+	return err
+}
+
+func (s sqliteStorage) UpdateProvider(p *entities.Provider) error {
+	_, err := s.db.Exec(`
+		UPDATE providers
+		SET 
+			username = $1,
+			password = $2,
+			phone_number = $3,
+			type = $4,
+			success = $6, 
+			failed = $7, 
+			invalid_credential = $8,
+			insufficient_credit = $9 
+		WHERE id = $10
+	`,
 		p.Username, p.Password, p.PhoneNumber, p.Type,
+		p.Success, p.Failed, p.InvalidCredential,
+		p.InSufficientCredit, p.Id,
 	)
 	return err
 }

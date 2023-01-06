@@ -11,6 +11,7 @@ type SMSService interface {
 	SendSMSWith(providerId int, message string, phoneNumber string) error
 	SendSMS(message string, phoneNumber string) error
 	CreateProvider(*entities.Provider) error
+	UpdateProvider(*entities.Provider) error
 }
 
 type smsService struct {
@@ -24,7 +25,7 @@ func NewSMSService(storage database.Storage, m sender.SenderMap) *smsService {
 
 func (s *smsService) CreateProvider(p *entities.Provider) error {
 	// Check if already exist
-	found, err := s.storage.FoundProviderByUsername(p.Username)
+	found, err := s.storage.ExistProviderByUsername(p.Username)
 	if err != nil {
 		return err
 	}
@@ -36,6 +37,10 @@ func (s *smsService) CreateProvider(p *entities.Provider) error {
 		return err
 	}
 	return s.storage.CreateProvider(p)
+}
+
+func (s *smsService) UpdateProvider(p *entities.Provider) error {
+	return s.storage.UpdateProvider(p)
 }
 
 func (s *smsService) SendSMSWith(providerId int, message string, phoneNumber string) error {
@@ -61,5 +66,19 @@ func (s *smsService) SendSMS(message string, phoneNumber string) error {
 }
 
 func (s *smsService) sendSMS(p *entities.Provider, message string, phoneNumber string) error {
-	return s.senders.SendSMS(p, message, phoneNumber, false)
+	err := s.senders.SendSMS(p, message, phoneNumber, false)
+	switch err {
+	case sender.ErrInvalidCredentials:
+		p.InvalidCredential = true
+		return s.UpdateProvider(p)
+	case sender.ErrInsufficientCredit:
+		p.InSufficientCredit = true
+		return s.UpdateProvider(p)
+	case sender.ErrProviderProblem:
+		p.Failed += 1
+		return s.UpdateProvider(p)
+	default:
+		p.Success += 1
+		return s.UpdateProvider(p)
+	}
 }

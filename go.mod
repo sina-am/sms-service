@@ -5,6 +5,7 @@ go 1.18
 require (
 	github.com/Netflix/go-env v0.0.0-20220526054621-78278af1949d
 	github.com/go-playground/validator/v10 v10.11.1
+	github.com/google/go-cmp v0.5.9
 	github.com/gorilla/mux v1.8.0
 	github.com/mattn/go-sqlite3 v1.14.14
 	github.com/swaggo/swag v1.8.4
